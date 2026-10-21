@@ -6,7 +6,9 @@ using FishNet.Connection;
 
 /// <summary>
 /// Network paddle controller.
-/// Step 2: Input up, position down. Server decides paddle position.
+/// Step 2: Input up, position down.
+/// Step 3: Input validation (NaN, Clamp, Spectator).
+/// Step 4: Server rate limit (30 ms).
 /// </summary>
 public class PaddleController : NetworkBehaviour
 {
@@ -23,6 +25,11 @@ public class PaddleController : NetworkBehaviour
 
     // Step 2: server-only memory — last input the server accepted
     private float _serverAxis;
+
+    // Step 4: rate limit fields (server-only)
+    private const double MinInputGap = 0.030;
+    private double _lastInputTime = -1;
+    public int RejectedInputs;
 
     private void Awake()
     {
@@ -73,6 +80,9 @@ public class PaddleController : NetworkBehaviour
         }
 
         Debug.Log($"[Server] Assigned side {Side.Value} to client {OwnerId}");
+
+        // Step 4: Show the count
+        ConnectionHud.Panels.Add(() => $"Rejected inputs (paddle {OwnerId}): {RejectedInputs}");
     }
 
     public override void OnStopServer()
@@ -169,6 +179,21 @@ public class PaddleController : NetworkBehaviour
     [ServerRpc]
     private void ServerSetAxis(float axis)
     {
+        // Step 3 checks
+        if (float.IsNaN(axis)) return;
+        axis = Mathf.Clamp(axis, -1f, 1f);
+        if (Side.Value == Spectator) return;
+
+        // Step 4: Rate limit (30 ms)
+        double now = TimeManager.TicksToTime(TimeManager.Tick);
+        if (_lastInputTime >= 0 && now - _lastInputTime < MinInputGap)
+        {
+            RejectedInputs++;
+            Debug.Log($"[Server] Rejected input from client {OwnerId}: too fast.");
+            return;
+        }
+        _lastInputTime = now;
+
         _serverAxis = axis;
     }
 
