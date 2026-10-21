@@ -9,6 +9,7 @@ using FishNet.Connection;
 /// Step 2: Input up, position down.
 /// Step 3: Input validation (NaN, Clamp, Spectator).
 /// Step 4: Server rate limit (30 ms).
+/// Step 5: Cheat keys (C, X, T).
 /// </summary>
 public class PaddleController : NetworkBehaviour
 {
@@ -149,6 +150,31 @@ public class PaddleController : NetworkBehaviour
     {
         // First line: owner guard
         if (!IsOwner) return;
+
+        // Step 5: Cheat debug keys
+        // C (spam): a for loop that calls ServerSetAxis(1f) 20 times in one frame
+        if (Input.GetKeyDown(KeyCode.C))
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                ServerSetAxis(1f);
+            }
+        }
+
+        // X (speed hack): ServerSetAxis(50f) once
+        if (Input.GetKeyDown(KeyCode.X))
+        {
+            ServerSetAxis(50f);
+        }
+
+        // T (teleport): transform.position = NetworkBall.Instance.transform.position; on client, no RPC
+        if (Input.GetKeyDown(KeyCode.T))
+        {
+            if (NetworkBall.Instance != null)
+            {
+                transform.position = NetworkBall.Instance.transform.position;
+            }
+        }
 
         // Space pressed to request serve
         if (Input.GetKeyDown(KeyCode.Space))
