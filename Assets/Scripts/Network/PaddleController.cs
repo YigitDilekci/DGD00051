@@ -5,9 +5,8 @@ using FishNet.Object.Synchronizing;
 using FishNet.Connection;
 
 /// <summary>
-/// Homework 1, Steps 4, 6, 8: Network paddle controller.
-/// Replicates paddle movement, assigns player side (0 = LEFT, 1 = RIGHT, 2 = Spectator),
-/// and manages serve/goal RPCs.
+/// Network paddle controller.
+/// Step 2: Input up, position down. Server decides paddle position.
 /// </summary>
 public class PaddleController : NetworkBehaviour
 {
@@ -16,10 +15,14 @@ public class PaddleController : NetworkBehaviour
 
     [SerializeField] private float speed = 10f;
 
-    // 0 = LEFT, 1 = RIGHT, 2 = spectator
+    // 0 = LEFT, 1 = RIGHT, 2 = Spectator
+    private const int Spectator = 2;
     public readonly SyncVar<int> Side = new SyncVar<int>(2);
 
     private Renderer paddleRenderer;
+
+    // Step 2: server-only memory — last input the server accepted
+    private float _serverAxis;
 
     private void Awake()
     {
@@ -32,11 +35,20 @@ public class PaddleController : NetworkBehaviour
         Side.OnChange -= OnSideChange;
     }
 
+    public override void OnStartNetwork()
+    {
+        TimeManager.OnTick += OnTick;
+    }
+
+    public override void OnStopNetwork()
+    {
+        TimeManager.OnTick -= OnTick;
+    }
+
     public override void OnStartServer()
     {
         All.Add(this);
 
-        // Server only: determine first free side (0 = LEFT, 1 = RIGHT, 2 = spectator)
         bool leftTaken = false;
         bool rightTaken = false;
 
@@ -57,7 +69,7 @@ public class PaddleController : NetworkBehaviour
         }
         else
         {
-            Side.Value = 2; // spectator
+            Side.Value = Spectator; // spectator
         }
 
         Debug.Log($"[Server] Assigned side {Side.Value} to client {OwnerId}");
@@ -128,25 +140,36 @@ public class PaddleController : NetworkBehaviour
         // First line: owner guard
         if (!IsOwner) return;
 
-        // Move with W/S or arrows (one keyboard per machine)
-        float move = 0f;
-        if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) move += 1f;
-        if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) move -= 1f;
-
-        if (move != 0f)
-        {
-            Vector3 pos = transform.position;
-            pos.z += move * speed * Time.deltaTime;
-            float limit = Court.HalfHeight - Court.PaddleHalfLength;
-            pos.z = Mathf.Clamp(pos.z, -limit, limit);
-            transform.position = pos;
-        }
-
-        // Step 8: Space pressed to request serve
+        // Space pressed to request serve
         if (Input.GetKeyDown(KeyCode.Space))
         {
             RequestServe();
         }
+    }
+
+    private void OnTick()
+    {
+        // 1. Owner sends
+        if (IsOwner && Side.Value != Spectator)
+        {
+            float axis = 0f;
+            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) axis += 1f;
+            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) axis -= 1f;
+            ServerSetAxis(axis);
+        }
+
+        // 2. Server moves
+        if (IsServerInitialized)
+        {
+            transform.position += Vector3.forward * _serverAxis * speed * (float)TimeManager.TickDelta;
+            Court.ClampPaddle(transform);
+        }
+    }
+
+    [ServerRpc]
+    private void ServerSetAxis(float axis)
+    {
+        _serverAxis = axis;
     }
 
     [ServerRpc]
