@@ -64,6 +64,12 @@ public class ConnectionHud : MonoBehaviour
                     InstanceFinder.ServerManager.StartConnection();
                 }
 
+                if (GUILayout.Button("Start Host", GUILayout.Height(30)))
+                {
+                    InstanceFinder.ServerManager.StartConnection();
+                    InstanceFinder.ClientManager.StartConnection("127.0.0.1");
+                }
+
                 if (GUILayout.Button("Start Client", GUILayout.Height(30)))
                 {
                     InstanceFinder.ClientManager.StartConnection(serverAddress);
@@ -71,20 +77,32 @@ public class ConnectionHud : MonoBehaviour
             }
             else
             {
-                GUILayout.BeginHorizontal();
-                if (serverStarted && GUILayout.Button("Stop Server"))
+                if (serverStarted && clientStarted)
                 {
-                    InstanceFinder.ServerManager.StopConnection(true);
+                    if (GUILayout.Button("Stop Host", GUILayout.Height(30)))
+                    {
+                        InstanceFinder.ClientManager.StopConnection();
+                        InstanceFinder.ServerManager.StopConnection(true);
+                    }
                 }
-                if (clientStarted && GUILayout.Button("Stop Client"))
+                else
                 {
-                    InstanceFinder.ClientManager.StopConnection();
+                    GUILayout.BeginHorizontal();
+                    if (serverStarted && GUILayout.Button("Stop Server"))
+                    {
+                        InstanceFinder.ServerManager.StopConnection(true);
+                    }
+                    if (clientStarted && GUILayout.Button("Stop Client"))
+                    {
+                        InstanceFinder.ClientManager.StopConnection();
+                    }
+                    GUILayout.EndHorizontal();
                 }
-                GUILayout.EndHorizontal();
 
                 GUILayout.Space(5);
                 GUILayout.Label($"Tick: {InstanceFinder.TimeManager.Tick}", headerStyle);
                 GUILayout.Label($"RTT: {InstanceFinder.TimeManager.RoundTripTime} ms");
+                GUILayout.Label($"Paddles (All.Count): {PaddleController.All.Count}");
             }
         }
 

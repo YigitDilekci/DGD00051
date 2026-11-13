@@ -1,106 +1,93 @@
+// Pong — the networked paddle, Week 2 version (Steps 4, 6 and 8 of the build).
+// Step 4: a NetworkBehaviour; only the OWNER reads the keyboard; the SERVER assigns a side.
+// Step 6: a NetworkTransform COMPONENT on the prefab (no code): the owner's position replicates.
+// Step 8: the serve and the goal as three RPCs, one per direction:
+//     ServerRpc      owner  -> server   "I pressed Space, let me serve"
+//     ObserversRpc   server -> everyone "Player 2 scored, 3 : 2" (an event, not state)
+//     TargetRpc      server -> one client "YOU serve now"
+// Rule of the week: clients ASK, the server DECIDES, SyncVars carry the RESULT.
 using System.Collections.Generic;
-using UnityEngine;
+using FishNet.Connection;
 using FishNet.Object;
 using FishNet.Object.Synchronizing;
-using FishNet.Connection;
+using UnityEngine;
+using UnityEngine.InputSystem;
 
-/// <summary>
-/// Network paddle controller.
-/// Step 2: Input up, position down.
-/// Step 3: Input validation (NaN, Clamp, Spectator).
-/// Step 4: Server rate limit (30 ms).
-/// Step 5: Cheat keys (C, X, T).
-/// </summary>
 public class PaddleController : NetworkBehaviour
 {
-    public static readonly List<PaddleController> All = new List<PaddleController>();
+    public const int Left = 0, Right = 1, Spectator = 2;
+
+    /// The paddle this machine controls (null on a headless server, or before spawn).
     public static PaddleController Local { get; private set; }
 
-    [SerializeField] private float speed = 10f;
+    /// Every paddle this process knows about, in spawn order (server: all; client: all it observes).
+    public static readonly List<PaddleController> All = new List<PaddleController>();
 
-    // 0 = LEFT, 1 = RIGHT, 2 = Spectator
-    private const int Spectator = 2;
-    public readonly SyncVar<int> Side = new SyncVar<int>(2);
+    private static readonly Dictionary<int, PaddleController> ByOwner = new Dictionary<int, PaddleController>();   // server-side lookup
 
-    private Renderer paddleRenderer;
+    [SerializeField] private float speed      = 8f;
+    [SerializeField] private Color leftColor  = new Color(0.35f, 0.65f, 1f);
+    [SerializeField] private Color rightColor = new Color(1f, 0.60f, 0.25f);
 
-    // Step 2: server-only memory — last input the server accepted
-    private float _serverAxis;
-
-    // Step 4: rate limit fields (server-only)
-    private const double MinInputGap = 0.030;
-    private double _lastInputTime = -1;
-    public int RejectedInputs;
+    // ---- replicated state: server writes, everyone reads ----
+    // Which side of the court this paddle plays on. Decided by the SERVER when the object spawns;
+    // a third and later client becomes a spectator (hidden paddle, no input, sees everything).
+    public readonly SyncVar<int> Side = new SyncVar<int>(Spectator);
 
     private void Awake()
     {
-        paddleRenderer = GetComponent<Renderer>();
-        Side.OnChange += OnSideChange;
+        Side.OnChange += (prev, next, asServer) => Place();
     }
 
-    private void OnDestroy()
-    {
-        Side.OnChange -= OnSideChange;
-    }
-
-    public override void OnStartNetwork()
-    {
-        TimeManager.OnTick += OnTick;
-    }
-
-    public override void OnStopNetwork()
-    {
-        TimeManager.OnTick -= OnTick;
-    }
+    // ---- lifecycle callbacks (FishNet calls these; you never call them yourself) ----
 
     public override void OnStartServer()
     {
-        All.Add(this);
+        // Runs on the SERVER when this object is spawned. OwnerId is the connection that owns it.
+        if (!All.Contains(this)) All.Add(this);         // a host runs OnStartServer AND OnStartClient on the same object: list it once
+        ByOwner[OwnerId] = this;
 
-        bool leftTaken = false;
-        bool rightTaken = false;
-
-        foreach (var paddle in All)
+        // The server decides the side: first free of Left, Right; otherwise Spectator.
+        bool leftTaken = false, rightTaken = false;
+        foreach (PaddleController p in All)
         {
-            if (paddle == this) continue;
-            if (paddle.Side.Value == 0) leftTaken = true;
-            if (paddle.Side.Value == 1) rightTaken = true;
+            if (p == this) continue;
+            if (p.Side.Value == Left)  leftTaken  = true;
+            if (p.Side.Value == Right) rightTaken = true;
         }
+        Side.Value = !leftTaken ? Left : (!rightTaken ? Right : Spectator);    // SyncVar write on the server: every client will place it
 
-        if (!leftTaken)
-        {
-            Side.Value = 0; // LEFT
-        }
-        else if (!rightTaken)
-        {
-            Side.Value = 1; // RIGHT
-        }
-        else
-        {
-            Side.Value = Spectator; // spectator
-        }
-
-        Debug.Log($"[Server] Assigned side {Side.Value} to client {OwnerId}");
-
-        // Step 4: Show the count
-        ConnectionHud.Panels.Add(() => $"Rejected inputs (paddle {OwnerId}): {RejectedInputs}");
+        Debug.Log($"[Server] Spawned paddle #{ObjectId} for client {OwnerId}: {SideName(Side.Value)}.");
+        Debug.Log($"[Server] PaddleController.All.Count = {All.Count}.");
+        GameState.Announce($"Player {OwnerId} joined as {SideName(Side.Value)}");
+        GameState.Instance?.ServerPlayersChanged();
     }
 
     public override void OnStopServer()
     {
         All.Remove(this);
+        ByOwner.Remove(OwnerId);
+        GameState.Announce($"Player {OwnerId} ({SideName(Side.Value)}) left");
+        GameState.Instance?.ServerPlayersChanged();
     }
 
     public override void OnStartClient()
     {
-        All.Add(this);
-
-        if (IsOwner)
+        // Runs on EVERY client that can see this object — the owner and the others.
+        if (!All.Contains(this)) All.Add(this);
+        bool mine = IsOwner;
+        gameObject.name = mine ? $"Paddle {OwnerId} (me)" : $"Paddle {OwnerId}";
+        if (mine)
         {
             Local = this;
-            Debug.Log($"I am client {OwnerId}, side {Side.Value}");
-            Place();
+            Debug.Log($"[Client] I am client {OwnerId}, playing {SideName(Side.Value)}. My paddle is #{ObjectId}. Only I read the keyboard for it.");
         }
+        else
+        {
+            Debug.Log($"[Client] Another paddle appeared: client {OwnerId}, {SideName(Side.Value)}, object #{ObjectId}. NetworkTransform moves it for me.");
+        }
+        Debug.Log($"[Client] PaddleController.All.Count = {All.Count}.");
+        Place();
     }
 
     public override void OnStopClient()
@@ -109,139 +96,91 @@ public class PaddleController : NetworkBehaviour
         if (Local == this) Local = null;
     }
 
-    private void OnSideChange(int prev, int next, bool asServer)
+    // ---- server-side helpers ----
+
+    /// Server-only: the paddle owned by a connection (null if none).
+    public static PaddleController ForConnection(NetworkConnection conn)
     {
-        Place();
+        if (conn == null) return null;
+        ByOwner.TryGetValue(conn.ClientId, out PaddleController p);
+        return p;
     }
 
-    public void Place()
+    /// Any machine: the paddle playing a side (null if that side is empty).
+    public static PaddleController ForSide(int side)
     {
-        if (paddleRenderer == null)
-            paddleRenderer = GetComponent<Renderer>();
-
-        if (Side.Value == 0) // LEFT
-        {
-            transform.position = new Vector3(-Court.PaddleX, transform.position.y, transform.position.z);
-            if (paddleRenderer != null)
-            {
-                paddleRenderer.enabled = true;
-                paddleRenderer.material.color = Color.blue;
-            }
-        }
-        else if (Side.Value == 1) // RIGHT
-        {
-            transform.position = new Vector3(Court.PaddleX, transform.position.y, transform.position.z);
-            if (paddleRenderer != null)
-            {
-                paddleRenderer.enabled = true;
-                paddleRenderer.material.color = new Color(1f, 0.5f, 0f); // orange
-            }
-        }
-        else // spectator
-        {
-            if (paddleRenderer != null)
-            {
-                paddleRenderer.enabled = false;
-            }
-        }
+        foreach (PaddleController p in All) if (p != null && p.Side.Value == side) return p;
+        return null;
     }
+
+    public static string SideName(int side) => side == Left ? "LEFT" : side == Right ? "RIGHT" : "SPECTATOR";
+
+    // ---- gameplay (owner only) ----
 
     private void Update()
     {
-        // First line: owner guard
+        // THE most important line of the block. Without it, every client moves every paddle.
         if (!IsOwner) return;
+        if (Side.Value == Spectator) return;            // spectators watch
 
-        // Step 5: Cheat debug keys
-        // C (spam): a for loop that calls ServerSetAxis(1f) 20 times in one frame
-        if (Input.GetKeyDown(KeyCode.C))
-        {
-            for (int i = 0; i < 20; i++)
-            {
-                ServerSetAxis(1f);
-            }
-        }
+        Keyboard kb = Keyboard.current;
+        if (kb == null) return;
 
-        // X (speed hack): ServerSetAxis(50f) once
-        if (Input.GetKeyDown(KeyCode.X))
-        {
-            ServerSetAxis(50f);
-        }
+        float dir = 0f;
+        if (kb.wKey.isPressed || kb.upArrowKey.isPressed)   dir += 1f;
+        if (kb.sKey.isPressed || kb.downArrowKey.isPressed) dir -= 1f;
 
-        // T (teleport): transform.position = NetworkBall.Instance.transform.position; on client, no RPC
-        if (Input.GetKeyDown(KeyCode.T))
-        {
-            if (NetworkBall.Instance != null)
-            {
-                transform.position = NetworkBall.Instance.transform.position;
-            }
-        }
+        // Still a plain local move. The NetworkTransform component on this prefab notices the
+        // change and sends it to the server, which forwards it to every other client (Step 6).
+        transform.position += Vector3.forward * dir * speed * Time.deltaTime;
+        Court.ClampPaddle(transform);
 
-        // Space pressed to request serve
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            RequestServe();
-        }
+        if (kb.spaceKey.wasPressedThisFrame)
+            ServerRequestServe();                       // ask; do not decide
     }
 
-    private void OnTick()
-    {
-        // 1. Owner sends
-        if (IsOwner && Side.Value != Spectator)
-        {
-            float axis = 0f;
-            if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) axis += 1f;
-            if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) axis -= 1f;
-            ServerSetAxis(axis);
-        }
+    // ---- the serve and the goal: three RPCs, three directions ----
 
-        // 2. Server moves
-        if (IsServerInitialized)
-        {
-            transform.position += Vector3.forward * _serverAxis * speed * (float)TimeManager.TickDelta;
-            Court.ClampPaddle(transform);
-        }
+    [ServerRpc]                                         // owner -> server. Only the owner may call it (default RequireOwnership = true).
+    private void ServerRequestServe()
+    {
+        GameState gs = GameState.Instance;
+        if (gs == null || NetworkBall.Instance == null) return;
+        if (gs.ServingSide.Value != Side.Value) return;         // not your serve: the request is refused, nothing happens anywhere
+        if (NetworkBall.Instance.InPlay.Value) return;          // stale: the ball is already moving
+
+        NetworkBall.Instance.ServerServe(towardSide: 1 - Side.Value);   // the SERVER launches the ball
+        GameState.Announce($"Player {OwnerId} ({SideName(Side.Value)}) served");
     }
 
-    [ServerRpc]
-    private void ServerSetAxis(float axis)
+    [ObserversRpc]                                      // server -> every client that observes this object
+    public void ObserversScored(int left, int right)
     {
-        // Step 3 checks
-        if (float.IsNaN(axis)) return;
-        axis = Mathf.Clamp(axis, -1f, 1f);
-        if (Side.Value == Spectator) return;
+        Debug.Log($"[Client] Goal! Player {OwnerId} ({SideName(Side.Value)}) scored. {left} : {right}");
+        ConnectionHud.Flash($"{SideName(Side.Value)} scored!  {left} : {right}");
+    }
 
-        // Step 4: Rate limit (30 ms)
-        double now = TimeManager.TicksToTime(TimeManager.Tick);
-        if (_lastInputTime >= 0 && now - _lastInputTime < MinInputGap)
+    [TargetRpc]                                         // server -> exactly one client, the connection passed as the first argument
+    public void TargetYouServe(NetworkConnection target)
+    {
+        Debug.Log("[Client] YOU serve. Press Space.");
+        ConnectionHud.Flash("YOU SERVE — press Space");
+    }
+
+    // ---- presentation ----
+
+    private void Place()
+    {
+        int side = Side.Value;
+        Renderer r = GetComponent<Renderer>();
+        if (side == Spectator)
         {
-            RejectedInputs++;
-            Debug.Log($"[Server] Rejected input from client {OwnerId}: too fast.");
+            if (r != null) r.enabled = false;           // a spectator's paddle exists but is not drawn
+            transform.position = new Vector3(0, -5f, 0);
             return;
         }
-        _lastInputTime = now;
-
-        _serverAxis = axis;
-    }
-
-    [ServerRpc]
-    public void RequestServe()
-    {
-        if (GameState.Instance == null || NetworkBall.Instance == null) return;
-        if (Side.Value != GameState.Instance.ServingSide.Value) return;
-        if (NetworkBall.Instance.InPlay.Value) return;
-
-        NetworkBall.Instance.Serve(1 - Side.Value);
-    }
-
-    [ObserversRpc]
-    public void AnnounceGoal(int left, int right)
-    {
-        ConnectionHud.Flash($"Goal! {left} : {right}");
-    }
-
-    [TargetRpc]
-    public void YouServe(NetworkConnection target)
-    {
-        ConnectionHud.Flash("YOU SERVE");
+        if (r != null) r.enabled = true;
+        transform.position = new Vector3(side == Left ? -Court.PaddleX : Court.PaddleX, 0.5f, transform.position.z);
+        Court.Paint(gameObject, side == Left ? leftColor : rightColor);
     }
 }
