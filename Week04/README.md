@@ -54,3 +54,18 @@
 
 2. **Input Rate Limiting:**
    A network security technique where the server tracks the timestamp of incoming requests per client and discards any subsequent requests that arrive faster than a predefined minimum threshold (e.g., 30 ms), preventing input flooding and macro/bot abuse.
+
+---
+
+## Homework 2 on a Host (Week 5 Section 7)
+
+> **Experiment:** Run Homework 2 using `Start Host` + one guest (Multiplayer Play Mode) instead of a dedicated server instance. Test every step from the guest window. When `Client Authoritative` goes off on `NetworkTransform`, watch which paddle gets late.
+
+### Observations & Results:
+- **Which paddle gets late:** The **guest's paddle (Right)** gets late. The **host's paddle (Left)** does NOT get late.
+- **Why (The Host Advantage under Server Authority):**
+  - When `Client Authoritative` is disabled on `NetworkTransform`, paddle movement is completely server-authoritative: the client only sends its directional input (axis) via `ServerSetAxis` `[ServerRpc]`, the server calculates the new transform position, and the server replicates that position back to clients.
+  - **Host Paddle (Left):** Because the host process **is** the server, the host's input executes locally in-memory with **0 ms latency** (RTT = 0). The server updates the host paddle immediately on the current tick without traveling across any network interface.
+  - **Guest Paddle (Right):** The guest must transmit its input over the network to the host ($1/2$ RTT), wait for the host server to simulate the movement, and wait for the updated position packet to travel back ($1/2$ RTT). As a result, the guest experiences a full round-trip delay (1 RTT + tick delay) between pressing an input key and observing paddle movement on screen.
+  - **Conclusion:** Server-authoritative gameplay without client-side prediction gives the host an overwhelming unfair latency advantage over remote guests.
+

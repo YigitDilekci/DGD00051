@@ -125,3 +125,20 @@ When clicking **Start Host**, the Console logs paddle instantiation and registra
   Guarding audio presentation behind `if (!asServer)` within the SyncVar `OnChange` callback, or placing audio playback exclusively inside the client RPC event handler (`ObserversRpc`).
 - **Why the score log does not double:**
   The `OnChange` callback on `SyncVar` passes `(int prev, int next, bool asServer)`. By checking `if (!asServer)` (or handling announcements solely on the server side in `ServerServe` / `GameState.Announce`), score notifications execute for client presentation only once.
+
+---
+
+## Section 7 — At Home: Homework 2 on a Host
+
+> **Instruction:** Homework 2 (the server decides) is unchanged. Do it with `Start Host` + one guest instead of a server instance. Test every step from the guest window. When `Client Authoritative` goes off, watch which paddle gets late. Not the host's. Write that in the Homework 2 README.
+
+### Findings & Detailed Comparison:
+- **Which paddle gets late:** The **guest's paddle** gets late. The **host's paddle does NOT get late.**
+- **Detailed Mechanics:**
+  - In Homework 1, `NetworkTransform` was client-authoritative (`Client Authoritative = on`). The guest client moved its own paddle immediately on local keypress and replicated position to the server. Both host and guest paddles responded instantly to their respective local keyboards.
+  - In Homework 2, `Client Authoritative` is disabled (`Client Authoritative = off`). Movement becomes completely server-authoritative. Clients cannot alter their own transform; they can only send directional input intent via `[ServerRpc] ServerSetAxis(axis)`.
+  - **Host Advantage on a Listen Server:**
+    - The **Host** is the server. Its inputs never leave the machine; they are applied in local memory instantly ($RTT = 0$ ms). The host paddle experiences zero input lag.
+    - The **Guest** must send its input over the network ($1/2$ RTT), wait for the server tick to calculate the new position, and wait for `NetworkTransform` to replicate the new position back ($1/2$ RTT). The guest experiences 1 full RTT of input delay.
+  - **Result:** The guest's paddle feels delayed, heavy, and unresponsive compared to the host's paddle. This demonstrates the fundamental problem of listen-server architectures with server authority without client-side prediction.
+
