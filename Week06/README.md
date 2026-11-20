@@ -107,3 +107,21 @@
 
 2. **Unity Relay:**  
    A cloud proxy service in Unity Gaming Services (UGS) that securely relays multiplayer network packets between players using temporary join codes, bypassing NAT boundaries and eliminating the need for public IP exposure or router configuration.
+
+---
+
+## The Pointed-At Line
+
+From Section 4.2 of the lecture notes and Homework 3 Step 2:
+```csharp
+if (_lastServeTime >= 0 && now - _lastServeTime < MinServeGap)
+```
+
+- **Explanation:** This is the critical rate-limiting line that prevents a cheating or spamming client from calling `ServerRequestServe()` repeatedly (e.g. 100 times per second).
+- **Machine it runs on:** It runs exclusively on the **server**, immediately after the null checks and strictly before the game-rule (`ServingSide`) check.
+- **Strict Server Validation Order:**
+  1. **Well-formed?** (Null check: `if (gs == null || NetworkBall.Instance == null) return;`)
+  2. **Too fast?** (**`if (_lastServeTime >= 0 && now - _lastServeTime < MinServeGap)` — The pointed-at line**, returning `TargetRefused(Owner, "TOO FAST");`)
+  3. **Allowed by rule?** (`if (gs.ServingSide.Value != Side.Value) return;`)
+  4. **Write state:** (`NetworkBall.Instance.ServerServe(towardSide: 1 - Side.Value);`)
+  5. **Announce:** (`GameState.Announce(...)`)
