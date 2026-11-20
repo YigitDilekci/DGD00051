@@ -16,6 +16,45 @@ public class ConnectionHud : MonoBehaviour
 
     [SerializeField] private string serverAddress = "127.0.0.1";
 
+    // Homework 3: Relay fields
+    private string _joinCode = "";
+    private string _relayCode = "";
+    private bool _relayBusy = false;
+
+    private async void HostViaRelay()
+    {
+        _relayBusy = true;
+        try
+        {
+            _relayCode = await RelayLink.StartRelayHost(2);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[Relay] Host failed: {ex.Message}");
+        }
+        finally
+        {
+            _relayBusy = false;
+        }
+    }
+
+    private async void JoinViaRelay()
+    {
+        _relayBusy = true;
+        try
+        {
+            await RelayLink.JoinRelay(_joinCode.Trim());
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[Relay] Join failed: {ex.Message}");
+        }
+        finally
+        {
+            _relayBusy = false;
+        }
+    }
+
     public static void Flash(string message)
     {
         flashMessage = message;
@@ -74,6 +113,24 @@ public class ConnectionHud : MonoBehaviour
                 {
                     InstanceFinder.ClientManager.StartConnection(serverAddress);
                 }
+
+                if (!_relayBusy)
+                {
+                    GUILayout.Space(8);
+                    if (GUILayout.Button("Host via Relay", GUILayout.Height(30)))
+                    {
+                        HostViaRelay();
+                    }
+
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("Join Code:", GUILayout.Width(70));
+                    _joinCode = GUILayout.TextField(_joinCode);
+                    if (GUILayout.Button("Join via Relay", GUILayout.Height(30)))
+                    {
+                        JoinViaRelay();
+                    }
+                    GUILayout.EndHorizontal();
+                }
             }
             else
             {
@@ -81,6 +138,7 @@ public class ConnectionHud : MonoBehaviour
                 {
                     if (GUILayout.Button("Stop Host", GUILayout.Height(30)))
                     {
+                        _relayCode = "";
                         InstanceFinder.ClientManager.StopConnection();
                         InstanceFinder.ServerManager.StopConnection(true);
                     }
@@ -90,6 +148,7 @@ public class ConnectionHud : MonoBehaviour
                     GUILayout.BeginHorizontal();
                     if (serverStarted && GUILayout.Button("Stop Server"))
                     {
+                        _relayCode = "";
                         InstanceFinder.ServerManager.StopConnection(true);
                     }
                     if (clientStarted && GUILayout.Button("Stop Client"))
@@ -97,6 +156,17 @@ public class ConnectionHud : MonoBehaviour
                         InstanceFinder.ClientManager.StopConnection();
                     }
                     GUILayout.EndHorizontal();
+                }
+
+                if (!string.IsNullOrEmpty(_relayCode) && serverStarted)
+                {
+                    GUILayout.Space(6);
+                    GUIStyle bigCodeStyle = new GUIStyle(GUI.skin.label)
+                    {
+                        fontSize = 18,
+                        fontStyle = FontStyle.Bold
+                    };
+                    GUILayout.Label($"<b>JOIN CODE: {_relayCode}</b>", bigCodeStyle);
                 }
 
                 GUILayout.Space(5);
